@@ -138,9 +138,9 @@ var ssvr = net.createServer(function(c){
 		c.ws.on('error', function(err){
 			console.log('Websocket error');
 		});
-		c.ws.on('end', function(err){
+		c.ws.on('close', function(err){
 			console.log('Websocket closed');
-			c.end();
+			c.destroy();
 		});
 		c.ws.once("message", function ws_phase1(data, opt){
 			if (opt.binary !== true){
@@ -150,6 +150,7 @@ var ssvr = net.createServer(function(c){
 			}
 			mask(data, c.dec);
 			var j = data.toString('utf8');
+			console.log(j);
 			try {
 				j = JSON.parse(j);
 			}catch(e){
@@ -183,13 +184,7 @@ var ssvr = net.createServer(function(c){
 				}
 				res[4+i] = p & 0xff;
 			}
-			var p = parseInt(j.port);
-			if (isNaN(p)){
-				errrep(1);
-				c.ws.close();
-				return;
-			}
-			res.writeInt16BE(p, 8);
+			res.writeUInt16BE(j.port, 8);
 			c.on('data', phase3);
 			c.ws.on('message', ws_phase2);
 			c.write(res);
