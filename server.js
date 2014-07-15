@@ -139,7 +139,7 @@ wss.on("connection", function(ws) {
 		ws.on('close', function(){
 			connections[path] = undefined;
 			if (ws.c)
-				ws.c.end();
+				ws.c.destroy();
 		});
 	};
 
