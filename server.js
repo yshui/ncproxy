@@ -82,7 +82,7 @@ wss.on("connection", function(ws) {
 	};
 
 	var phase2 = function(data, opt){
-		log.verbose(JSON.stringify(opt));
+		log.verbose(opt.binary);
 		if (opt.binary !== true)
 			return;
 		mask(data, ws.conn.dec);
@@ -90,7 +90,7 @@ wss.on("connection", function(ws) {
 	};
 
 	var phase1 = function(data, opt){
-		log.verbose(JSON.stringify(opt));
+		log.verbose(opt.binary);
 		if (opt.binary !== true)
 			return;
 		//Decode data
