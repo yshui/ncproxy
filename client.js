@@ -4,11 +4,12 @@ var crypto = require("crypto")
 var salsa = require("./salsa20.js")
 var net = require("net")
 var fs = require("fs")
+var log = require("npmlog")
 var cfg = fs.readFileSync("config.json", 'utf8')
 try {
 	cfg = JSON.parse(cfg)
 }catch(e){
-	console.log("Failed to parse config.json")
+	log.verbose("Failed to parse config.json")
 	process.exit(1)
 }
 
@@ -31,7 +32,8 @@ var ssvr = net.createServer(function(c){
 			c.ws.close();
 	});
 	c.on('error', function(err){
-		console.log("Connection to server closed");
+		log.error("Socks5 connection closed");
+		log.error(JSON.stringify(err));
 	});
 	var errrep = function (repcode){
 		var res = new Buffer(10);
@@ -49,7 +51,7 @@ var ssvr = net.createServer(function(c){
 		if (data[0] != 5)
 			//Not socks5
 			return c.end();
-		console.log(data);
+		log.verbose(data);
 		var sres = new Buffer(2);
 		sres[0] = 5;
 		sres[1] = 0; //No auth
@@ -60,15 +62,15 @@ var ssvr = net.createServer(function(c){
 				      headers: {"Content-Type": 'application/json'},
 				      method: 'POST', path: '/'},
 			function(res){
-				console.log("Nouce response");
+				log.verbose("Nouce response");
 				var response = "";
 				res.setEncoding('utf8');
 				res.on('data', function(data){
 					response += data;
 				});
 				res.on('end', function(){
-					console.log("Nouce response end");
-					console.log(response);
+					log.verbose("Nouce response end");
+					log.verbose(response);
 					try {
 						response = JSON.parse(response);
 						c.id = response.id;
@@ -78,11 +80,11 @@ var ssvr = net.createServer(function(c){
 							throw "No nouce";
 						var nouce = new Buffer(response.nouce, 'hex');
 						mask(nouce, c.dec);
-						console.log("nouce2: "+nouce.toString('hex'));
+						log.verbose("nouce2: "+nouce.toString('hex'));
 						c.enc = new salsa(cfg.key, nouce);
 					}catch(e){
-						console.log("Can't parse server response");
-						console.log(e);
+						log.verbose("Can't parse server response");
+						log.verbose(e);
 						c.end();
 						return;
 					}
@@ -91,7 +93,7 @@ var ssvr = net.createServer(function(c){
 				});
 			});
 		req.on('error', function(err){
-			console.log(err);
+			log.error(err);
 			errrep(1);
 		});
 		var rb = crypto.pseudoRandomBytes(8);
@@ -104,7 +106,7 @@ var ssvr = net.createServer(function(c){
 	};
 	c.once('data', phase1);
 	var phase2 = function(data){
-		console.log("Received socks5 request");
+		log.verbose("Received socks5 request");
 		if (data[0] != 5)
 			return c.end();
 		if (data[1] != 1)
@@ -126,20 +128,22 @@ var ssvr = net.createServer(function(c){
 			j.port = data.readInt16BE(5+len);
 			break;
 		}
+		log.info("socks5 target: "+j.addr+":"+j.port);
 		var url = "ws://"+cfg.host;
 		if (cfg.port)
 			url += ":"+cfg.port;
 		url += "/"+c.id;
-		console.log("creating websocket to "+url);
+		log.verbose("creating websocket to "+url);
 		c.ws = new ws(url, {mask: false});
 		j = JSON.stringify(j);
 		j = new Buffer(j, 'utf8');
 		mask(j, c.enc);
 		c.ws.on('error', function(err){
-			console.log('Websocket error');
+			log.error('Websocket error');
+			log.error(JSON.stringify(err));
 		});
 		c.ws.on('close', function(err){
-			console.log('Websocket closed');
+			log.verbose('Websocket closed');
 			c.destroy();
 		});
 		c.ws.once("message", function ws_phase1(data, opt){
@@ -150,11 +154,11 @@ var ssvr = net.createServer(function(c){
 			}
 			mask(data, c.dec);
 			var j = data.toString('utf8');
-			console.log(j);
+			log.verbose(j);
 			try {
 				j = JSON.parse(j);
 			}catch(e){
-				console.log("Can't parse websocket message");
+				log.error("Can't parse websocket message");
 				c.ws.close();
 				c.end();
 				return;

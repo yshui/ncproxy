@@ -6,6 +6,8 @@ var crypto = require("crypto")
 var salsa = require("./salsa20.js")
 var net = require("net")
 var fs = require("fs")
+var log = require("npmlog")
+log.stream = process.stdout
 var port = process.env.PORT || 5000
 var util = require("util")
 
@@ -15,7 +17,7 @@ var cfg = fs.readFileSync("config.json", 'utf8')
 try {
 	cfg = JSON.parse(cfg)
 }catch(e){
-	util.log("Failed to parse config.json")
+	log.verbose("Failed to parse config.json")
 	process.exit(1)
 }
 
@@ -36,7 +38,7 @@ function mask(data, gen){
 
 app.use(bp.json());
 app.use(function(req, res){
-	util.log(req.body);
+	log.verbose(req.body);
 	if (!req.body.nouce)
 		return res.end();
 	var nouce = new Buffer(req.body.nouce, 'hex');
@@ -49,7 +51,7 @@ app.use(function(req, res){
 		    id: rb};
 	connections[rb] = conn;
 
-	util.log("nouce2: "+nouce2.toString('hex'));
+	log.verbose("nouce2: "+nouce2.toString('hex'));
 	mask(nouce2, enc);
 	res.setHeader('Content-Type', 'application/json');
 	res.end(JSON.stringify({id: rb, nouce: nouce2.toString('hex')}))
@@ -58,14 +60,14 @@ app.use(function(req, res){
 var server = http.createServer(app)
 server.listen(port)
 
-util.log("http server listening on %d", port)
+log.verbose("http server listening on %d", port)
 
 var wss = new wsserver({server: server})
-util.log("websocket server created")
+log.verbose("websocket server created")
 
 wss.on("connection", function(ws) {
 	var path = ws.upgradeReq.url.slice(1);
-	util.log("websocket, path:"+path)
+	log.verbose("websocket, path:"+path)
 	if (!connections[path])
 		ws.close();
 
@@ -79,7 +81,7 @@ wss.on("connection", function(ws) {
 	};
 
 	var phase2 = function(data, opt){
-		util.log(opt);
+		log.verbose(opt);
 		if (opt.binary !== true)
 			return;
 		mask(data, ws.conn.dec);
@@ -87,28 +89,29 @@ wss.on("connection", function(ws) {
 	};
 
 	var phase1 = function(data, opt){
-		util.log(opt);
+		log.verbose(opt);
 		if (opt.binary !== true)
 			return;
 		//Decode data
 		mask(data, ws.conn.dec);
-		util.log(data);
+		log.verbose(data);
 		//json encoded target address
 		var j = data.toString('utf8');
 		try {
 			j = JSON.parse(j);
 		}catch(e){
-			util.log("Garbage from client");
+			log.warn("Garbage from client");
 			return ws.close();
 		}
 		if (j.addrtype == 4)
 			//Ipv6 not supported yet
 			return errrep(8);
 		//Open connection
-		util.log(j);
+		log.verbose(j);
+		log.verbose("Target: "+j.addr+":"+j.port);
 		ws.c = net.connect({host:j.addr, port:j.port});
 		ws.c.on('connect',function(){
-			util.log("connected to "+j.addr+"("+ws.c.remoteAddress+"):"+j.port);
+			log.verbose("connected to "+j.addr+"("+ws.c.remoteAddress+"):"+j.port);
 			var res = {rep: 0, atyp: 1,
 				   addr: ws.c.localAddress,
 				   port: ws.c.localPort};
@@ -122,8 +125,8 @@ wss.on("connection", function(ws) {
 			ws.send(data, {binary: true});
 		});
 		ws.c.on('error', function(e){
-			util.log("Failed to connect to "+j.addr);
-			util.log(e);
+			log.error("Failed to connect to "+j.addr);
+			log.error(e);
 			if (e.code === 'ECONNREFUSED')
 				return errrep(5);
 			if (e.code === 'ENETUNREACH')
@@ -147,6 +150,6 @@ wss.on("connection", function(ws) {
 	ws.once("message", phase1);
 
 	ws.on("close", function() {
-		util.log("websocket connection close")
+		log.verbose("websocket connection close")
 	})
 })

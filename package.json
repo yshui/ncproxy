@@ -8,7 +8,8 @@
   "dependencies": {
     "connect": "~3.0.2",
     "ws": "0.4.x",
-    "body-parser": "~1.4.2"
+    "body-parser": "~1.4.2",
+    "npmlog": "~0.1.1"
   },
   "engines": {
     "node": "0.10.x"
