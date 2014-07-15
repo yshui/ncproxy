@@ -1,18 +1,5 @@
-# Node.js Websocket Test
+# NCProxy
 
-A tiny demo using the [einaros/ws](http://einaros.github.io/ws/) WebSockets implementation.
+NoCash Proxy.
 
-# Running Locally
-
-``` bash
-npm install
-npm start
-```
-
-# Running on Heroku
-
-``` bash
-heroku create
-git push heroku master
-heroku open
-```
+This proxy does exactly the same thing as [shadowsocks-dotcloud](https://github.com/clowwindy/shadowsocks-dotcloud)
