@@ -105,9 +105,8 @@ wss.on("connection", function(ws) {
 		//Open connection
 		util.log(j);
 		ws.c = net.connect({host:j.addr, port:j.port});
-		ws.c.on('connect',function(c){
-			ws.c = c;
-			util.log("connected to "+j.addr+"("+c.remoteAddress+"):"+j.port);
+		ws.c.on('connect',function(){
+			util.log("connected to "+j.addr+"("+ws.c.remoteAddress+"):"+j.port);
 			var res = {rep: 0, atyp: 1,
 				   addr: c.localAddress,
 				   port: c.localPort};
