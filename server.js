@@ -110,8 +110,8 @@ wss.on("connection", function(ws) {
 		ws.c.on('connect',function(){
 			util.log("connected to "+j.addr+"("+ws.c.remoteAddress+"):"+j.port);
 			var res = {rep: 0, atyp: 1,
-				   addr: c.localAddress,
-				   port: c.localPort};
+				   addr: ws.c.localAddress,
+				   port: ws.c.localPort};
 			res = new Buffer(JSON.stringify(res), 'utf8');
 			mask(res, ws.conn.enc);
 			ws.send(res, {binary: true});
