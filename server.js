@@ -37,6 +37,8 @@ function mask(data, gen){
 app.use(bp.json());
 app.use(function(req, res){
 	util.log(req.body);
+	if (!req.body.nouce)
+		return res.end();
 	var nouce = new Buffer(req.body.nouce, 'hex');
 	var nouce2 = crypto.pseudoRandomBytes(8);
 	var enc = new salsa(cfg.key, nouce);
