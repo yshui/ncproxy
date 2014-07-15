@@ -8,6 +8,7 @@ var net = require("net")
 var fs = require("fs")
 var log = require("npmlog")
 log.stream = process.stdout
+log.level = 'verbose';
 var port = process.env.PORT || 5000
 var util = require("util")
 
