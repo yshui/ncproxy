@@ -39,7 +39,7 @@ function mask(data, gen){
 
 app.use(bp.json());
 app.use(function(req, res){
-	log.verbose(req.body);
+	log.verbose(JSON.stringify(req.body));
 	if (!req.body.nouce)
 		return res.end();
 	var nouce = new Buffer(req.body.nouce, 'hex');
@@ -82,7 +82,7 @@ wss.on("connection", function(ws) {
 	};
 
 	var phase2 = function(data, opt){
-		log.verbose(opt);
+		log.verbose(JSON.stringify(opt));
 		if (opt.binary !== true)
 			return;
 		mask(data, ws.conn.dec);
@@ -90,12 +90,12 @@ wss.on("connection", function(ws) {
 	};
 
 	var phase1 = function(data, opt){
-		log.verbose(opt);
+		log.verbose(JSON.stringify(opt));
 		if (opt.binary !== true)
 			return;
 		//Decode data
 		mask(data, ws.conn.dec);
-		log.verbose(data);
+		log.verbose(data.toString('utf8'));
 		//json encoded target address
 		var j = data.toString('utf8');
 		try {
@@ -108,7 +108,7 @@ wss.on("connection", function(ws) {
 			//Ipv6 not supported yet
 			return errrep(8);
 		//Open connection
-		log.verbose(j);
+		log.verbose(JSON.stringify(j));
 		log.verbose("Target: "+j.addr+":"+j.port);
 		ws.c = net.connect({host:j.addr, port:j.port});
 		ws.c.on('connect',function(){
