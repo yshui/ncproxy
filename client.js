@@ -160,7 +160,8 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 			cmd: "local_end",
 			id: c.id
 		}
-		esend(master, JSON.stringify(req), menc);
+		if (c.ws == ws.OPEN)
+			esend(master, JSON.stringify(req), menc);
 	});
 	c.on('close', function(){
 		if (c.ws)
