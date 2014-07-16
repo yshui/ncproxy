@@ -250,6 +250,8 @@ wss.on("connection", function(ws) {
 			if (ws.conn.master){
 				var m = ws.conn.master;
 				delete m.conn.conn[path];
+			} else {
+				log.warn("WTF?");
 			}
 			ws.close(1000);
 		});
