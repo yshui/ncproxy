@@ -12,9 +12,12 @@ var connections = {};
 try {
 	cfg = JSON.parse(cfg)
 }catch(e){
-	log.verbose("Failed to parse config.json")
+	log.error("Failed to parse config.json")
 	process.exit(1)
 }
+
+if (cfg.log_level)
+	log.level = cfg.log_level;
 
 function mask(data, gen){
 	if (!(data instanceof Buffer))
@@ -128,8 +131,9 @@ var req = https.request({
 			ssvr.listen(cfg.localport);
 		});
 		master.on('message', handle_master_cmd);
-		master.on('close', function(){
+		master.on('close', function(code){
 			log.error("Master connection gone");
+			log.error("code "+code);
 			process.exit(1);
 		});
 		master.on('error', function(err){
@@ -149,7 +153,7 @@ req.on('error', function(err){
 req.write(JSON.stringify(opt));
 req.end();
 
-ssvr = net.createServer(function(c){
+ssvr = net.createServer({allowHalfOpen: true}, function(c){
 	c.on('end', function(){
 		//send local_end
 		var req = {

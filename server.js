@@ -22,6 +22,9 @@ try {
 	process.exit(1)
 }
 
+if (cfg.log_level)
+	log.level = cfg.log_level;
+
 var connections = {};
 
 function mask(data, gen){
