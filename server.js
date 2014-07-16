@@ -83,9 +83,11 @@ wss.on("connection", function(ws) {
 			var m = ws.conn.master;
 			delete m.conn.conn[path];
 		}
+		clearInterval(ws.timer);
 		if (ws.c)
 			ws.c.destroy();
 	});
+	ws.timer = setInterval(function(){ws.ping(false);}, 10000);
 	var errrep = function(repcode){
 		var res = JSON.stringify({rep: repcode});
 		res = new Buffer(res, 'utf8');

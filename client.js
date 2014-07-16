@@ -63,8 +63,9 @@ var handle_master_cmd = function(j, opt){
 				log.error("Garbage from server, abort.");
 				process.exit(1);
 			}
-			conn.c.enc = new salsa(mkey, j.nouce);
-			conn.c.once('data', conn.c.phase2);
+			var nouce = new Buffer(j.nouce, 'hex');
+			conn.c.enc = new salsa(mkey, nouce);
+			conn.c.once('data', conn.phase2);
 			delete conn.phase2;
 			res = new Buffer(2);
 			res[0] = 5;
@@ -79,6 +80,9 @@ var handle_master_cmd = function(j, opt){
 			}
 			conn.c.end();
 			break;
+		default :
+			log.error("Garbage from server, abort. unknown cmd.");
+			process.exit(1);
 	}
 };
 log.verbose("Starting https connection to server");
@@ -131,6 +135,10 @@ var req = https.request({
 		master.on('error', function(err){
 			log.error("master error");
 			log.error(JSON.stringify(err));
+		});
+		master.on('ping', function(){
+			log.verbose("ws ping from server (master connection)");
+			master.pong(false);
 		});
 	});
 });
@@ -279,6 +287,10 @@ ssvr = net.createServer(function(c){
 		});
 		c.ws.on('open', function(){
 			c.ws.send(j, {binary: true});
+		});
+		c.ws.on('ping', function(){
+			log.verbose("ws ping from server (data connection)");
+			c.ws.pong(false);
 		});
 	};
 	var phase3 = function(data){
