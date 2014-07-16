@@ -1,11 +1,14 @@
 var ws = require("ws")
-var http = require("http")
+var https = require("https")
 var crypto = require("crypto")
 var salsa = require("./salsa20.js")
 var net = require("net")
 var fs = require("fs")
 var log = require("npmlog")
+log.level = "verbose";
 var cfg = fs.readFileSync("config.json", 'utf8')
+var ssvr;
+var connections = {};
 try {
 	cfg = JSON.parse(cfg)
 }catch(e){
@@ -26,8 +29,128 @@ function mask(data, gen){
 		data[i] ^= out[i];
 }
 
-var ssvr = net.createServer(function(c){
+function esend(ws, str, gen){
+	var b = new Buffer(str, 'utf8');
+	mask(b, gen);
+	ws.send(b, {binary: true});
+}
+
+//Request a master websocket
+var master, menc, mdec, mkey;
+var svr_url = "ws://"+cfg.host;
+if (cfg.port)
+	svr_url += ":"+cfg.port;
+var rb = crypto.pseudoRandomBytes(8);
+var opt = {nouce: rb.toString('hex')};
+if (cfg.password)
+	opt.password = cfg.password;
+var handle_master_cmd = function(j, opt){
+	if (!opt.binary)
+		return;
+	mask(j, mdec);
+	j = j.toString('utf8');
+	log.error(j);
+	try {
+		j = JSON.parse(j);
+	}catch(e){
+		log.error("Garbage from server, abort.");
+		log.error(JSON.stringify(e));
+		process.exit(1);
+	}
+	var conn, res;
+	switch(j.cmd){
+		case "new_connection":
+			conn = connections[j.id];
+			if (!conn || !j.nouce) {
+				log.error("Garbage from server, abort.");
+				process.exit(1);
+			}
+			conn.c.enc = new salsa(mkey, j.nouce);
+			conn.c.once('data', conn.c.phase2);
+			delete conn.phase2;
+			res = new Buffer(2);
+			res[0] = 5;
+			res[1] = 0;
+			conn.c.write(res);
+			break;
+		case "remote_end":
+			conn = connections[j.id];
+			if (!conn) {
+				log.error("Garbage from server, abort.");
+				process.exit(1);
+			}
+			conn.c.end();
+			break;
+	}
+};
+var req = https.request({
+	host: cfg.host, port: cfg.port,
+	headers: {"Content-Type": 'application/json'},
+	method: 'POST', path: '/', ciphers: 'DHE'
+},function(res){
+	log.verbose("master nouce response");
+	var response = "";
+	res.setEncoding('utf8');
+	res.on('data', function(data){
+		response += data;
+	});
+	res.on('error', function(err){
+		log.error("Read server response error");
+		log.error(JSON.stringify(err));
+		process.exit(1);
+	});
+	res.on('end', function(){
+		log.verbose("master nouce response end");
+		log.verbose(response);
+		try {
+			response = JSON.parse(response);
+			if (!response.id)
+				throw "No id";
+			if (!response.nouce)
+				throw "No nouce";
+			if (!response.key)
+				throw "No key";
+			var nouce = new Buffer(response.nouce, 'hex');
+			menc = new salsa(response.key, nouce);
+			mdec = new salsa(response.key, rb);
+		}catch(e){
+			log.verbose("Can't parse server response");
+			log.verbose(e);
+			process.exit(1);
+		}
+		master = new ws(svr_url+"/"+response.id, {mask: false});
+		mkey = response.key;
+		master.on('open', function(){
+			esend(master, JSON.stringify({api: true}), menc);
+			ssvr.listen(cfg.localport);
+		});
+		master.on('message', handle_master_cmd);
+		master.on('close', function(){
+			log.error("Master connection gone");
+			process.exit(1);
+		});
+		master.on('error', function(){
+			log.error("master error");
+		});
+	});
+});
+req.on('error', function(err){
+	log.error(err);
+	process.exit(1);
+});
+req.write(JSON.stringify(opt));
+req.end();
+
+ssvr = net.createServer(function(c){
 	c.on('end', function(){
+		//send local_end
+		var req = {
+			cmd: "local_end",
+			id: c.id
+		}
+		esend(master, JSON.stringify(req), menc);
+	});
+	c.on('close', function(){
 		if (c.ws)
 			c.ws.close();
 	});
@@ -52,57 +175,21 @@ var ssvr = net.createServer(function(c){
 			//Not socks5
 			return c.end();
 		log.verbose(data);
-		var sres = new Buffer(2);
-		sres[0] = 5;
-		sres[1] = 0; //No auth
-		var req =
-			http.request({
-				      host: cfg.host,
-				      port: cfg.port,
-				      headers: {"Content-Type": 'application/json'},
-				      method: 'POST', path: '/'},
-			function(res){
-				log.verbose("Nouce response");
-				var response = "";
-				res.setEncoding('utf8');
-				res.on('data', function(data){
-					response += data;
-				});
-				res.on('end', function(){
-					log.verbose("Nouce response end");
-					log.verbose(response);
-					try {
-						response = JSON.parse(response);
-						c.id = response.id;
-						if (!c.id)
-							throw "No id";
-						if (!response.nouce)
-							throw "No nouce";
-						var nouce = new Buffer(response.nouce, 'hex');
-						mask(nouce, c.dec);
-						log.verbose("nouce2: "+nouce.toString('hex'));
-						c.enc = new salsa(cfg.key, nouce);
-					}catch(e){
-						log.verbose("Can't parse server response");
-						log.verbose(e);
-						c.end();
-						return;
-					}
-					c.once('data', phase2);
-					c.write(sres);
-				});
-			});
-		req.on('error', function(err){
-			log.error(err);
-			errrep(1);
-		});
-		var rb = crypto.pseudoRandomBytes(8);
-		var opt = JSON.stringify({
-			nouce: rb.toString('hex')
-		});
-		c.dec = new salsa(cfg.key, rb);
-		req.write(opt);
-		req.end();
+		var n1 = crypto.pseudoRandomBytes(8);
+		var conn = {
+			id: crypto.pseudoRandomBytes(16).toString('hex'),
+			c: c,
+			phase2: phase2
+		};
+		var req = {
+			cmd: "new_connection",
+			id: conn.id,
+			nouce: n1.toString('hex');
+		};
+		c.id = conn.id;
+		c.dec = new salsa(mkey, n1);
+		connections[conn.id] = conn;
+		esend(master, JSON.stringify(req), menc);
 	};
 	c.once('data', phase1);
 	var phase2 = function(data){
@@ -129,10 +216,7 @@ var ssvr = net.createServer(function(c){
 			break;
 		}
 		log.info("socks5 target: "+j.addr+":"+j.port);
-		var url = "ws://"+cfg.host;
-		if (cfg.port)
-			url += ":"+cfg.port;
-		url += "/"+c.id;
+		var url = svr_url+"/"+c.id;
 		log.verbose("creating websocket to "+url);
 		c.ws = new ws(url, {mask: false});
 		j = JSON.stringify(j);
@@ -208,4 +292,3 @@ var ssvr = net.createServer(function(c){
 		c.write(data);
 	}
 });
-ssvr.listen(cfg.localport);

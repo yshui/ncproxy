@@ -22,8 +22,6 @@ try {
 	process.exit(1)
 }
 
-cfg.key = crypto.pbkdf2Sync(cfg.password, "", 1000, 256)
-
 var connections = {};
 
 function mask(data, gen){
@@ -40,22 +38,29 @@ function mask(data, gen){
 app.use(bp.json());
 app.use(function(req, res){
 	log.verbose(JSON.stringify(req.body));
+	res.setHeader('Content-Type', 'application/json');
 	if (!req.body.nouce)
 		return res.end();
+	if (cfg.password && cfg.password !== req.body.password)
+		return res.end('{"err":"Password mismatch"}');
 	var nouce = new Buffer(req.body.nouce, 'hex');
 	var nouce2 = crypto.pseudoRandomBytes(8);
-	var enc = new salsa(cfg.key, nouce);
-	var dec = new salsa(cfg.key, nouce2);
+	var key = crypto.pseudoRandomBytes(32);
+	var enc = new salsa(key, nouce);
+	var dec = new salsa(key, nouce2);
 	var rb = crypto.pseudoRandomBytes(16).toString('hex');
 	var conn = {enc: enc,
 		    dec: dec,
-		    id: rb};
+		    key: key,
+		    id: rb,
+		    conn: {}};
 	connections[rb] = conn;
 
-	log.verbose("nouce2: "+nouce2.toString('hex'));
-	mask(nouce2, enc);
-	res.setHeader('Content-Type', 'application/json');
-	res.end(JSON.stringify({id: rb, nouce: nouce2.toString('hex')}))
+	res.end(JSON.stringify({
+		id: rb,
+		nouce: nouce2.toString('hex'),
+		key: key.toString('hex')
+	}))
 })
 
 var server = http.createServer(app)
@@ -70,16 +75,104 @@ wss.on("connection", function(ws) {
 	var path = ws.upgradeReq.url.slice(1);
 	log.verbose("websocket, path:"+path)
 	if (!connections[path])
-		ws.close();
+		ws.close(1003);
 
+	ws.on('close', function(){
+		delete connections[path];
+		if (ws.conn.master){
+			var m = ws.conn.master;
+			delete m.conn.conn[path];
+		}
+		if (ws.c)
+			ws.c.destroy();
+	});
 	var errrep = function(repcode){
 		var res = JSON.stringify({rep: repcode});
 		res = new Buffer(res, 'utf8');
 		mask(res, ws.conn.enc);
 		ws.send(res, {binary: true});
-		connections[path] = undefined;
-		ws.close();
+		delete connections[path];
+		if (ws.conn.master){
+			var m = ws.conn.master;
+			delete m.conn.conn[path];
+		}
+		ws.close(1003);
 	};
+
+	var handle_new_conn = function(j){
+		if (!j.nouce || connections[j.id]) {
+			log.error('Malformed client request');
+			return ws.close(1003);
+		}
+		var nouce = new Buffer(j.nouce, 'hex');
+		var nouce2 = crypto.pseudoRandomBytes(8);
+		var enc = new salsa(ws.conn.key, nouce);
+		var dec = new salsa(ws.conn.key, nouce2);
+		var conn = {
+			enc: enc,
+			dec: dec,
+			id: j.id,
+			master: ws
+		};
+		connections[j.id] = conn;
+		ws.conn.conn[j.id] = 1;
+
+		log.verbose("nouce2: "+nouce2.toString('hex'));
+		var res = JSON.stringify({
+			id: j.id,
+			nouce: nouce2.toString('hex'),
+		});
+		res = new Buffer(res, 'utf8');
+		mask(res, ws.conn.enc);
+		ws.send(res, {binary: true});
+	}
+
+	var handle_local_end = function(j){
+		if (!connections[j.id]) {
+			log.error('Malformed client request, nonexistent id');
+			return ws.close(1003);
+		}
+		var conn = connections[j.id];
+		if (!conn.master) {
+			log.error('Malformed client request, local_end id point to a api websocket');
+			return ws.close(1003);
+		}
+		if (!conn.master.conn.conn[j.id]){
+			log.error('Malformed client request, local_end id point to socket doesnt belong to the client');
+			return ws.close(1003);
+		}
+		if (!conn.c)
+			return;
+		conn.c.end();
+	}
+
+	var api_handler = function(data, opt){
+		if (opt.binary !== true)
+			return;
+		mask(data, ws.conn.dec);
+		var j;
+		try{
+			j = JSON.parse(data.toString('utf8'));
+		}catch(e){
+			log.error('Failed to parse client api request');
+			log.info(data.toString('utf8'));
+			ws.close(1003);
+		}
+		log.verbose(JSON.stringify(j));
+		if (!j.id){
+			log.error('Malformed client request');
+			return ws.close(1003);
+		}
+		switch (j.cmd){
+			case "new_connection":
+				return handle_new_conn(j);
+			case "local_end":
+				return handle_local_end(j);
+			default :
+				log.error('Malformed client request');
+				return ws.close(1003);
+		}
+	}
 
 	var phase2 = function(data, opt){
 		log.verbose(opt.binary);
@@ -102,7 +195,11 @@ wss.on("connection", function(ws) {
 			j = JSON.parse(j);
 		}catch(e){
 			log.warn("Garbage from client");
-			return ws.close();
+			return ws.close(1003);
+		}
+		if (j.api === true) {
+			ws.on('message', api_handler);
+			return;
 		}
 		if (j.addrtype == 4)
 			//Ipv6 not supported yet
@@ -110,7 +207,7 @@ wss.on("connection", function(ws) {
 		//Open connection
 		log.verbose(JSON.stringify(j));
 		log.verbose("Target: "+j.addr+":"+j.port);
-		ws.c = net.connect({host:j.addr, port:j.port});
+		ws.conn.c = ws.c = net.connect({host:j.addr, port:j.port, allowHalfOpen: true});
 		ws.c.on('connect',function(){
 			log.verbose("connected to "+j.addr+"("+ws.c.remoteAddress+"):"+j.port);
 			var res = {rep: 0, atyp: 1,
@@ -137,13 +234,21 @@ wss.on("connection", function(ws) {
 			return errrep(1);
 		});
 		ws.c.on('end', function(){
-			connections[path] = undefined;
-			ws.close();
+			if (ws.conn.master) {
+				//Send remote_end cmd
+				var msg = JSON.stringify({cmd: "remote_end", id: ws.conn.id});
+				msg = new Buffer(msg, 'utf8');
+				mask(msg, ws.conn.enc);
+				ws.send(msg, {binary: true});
+			}
 		});
-		ws.on('close', function(){
-			connections[path] = undefined;
-			if (ws.c)
-				ws.c.destroy();
+		ws.c.on('close', function(){
+			delete connections[path];
+			if (ws.conn.master){
+				var m = ws.conn.master;
+				delete m.conn.conn[path];
+			}
+			ws.close(1000);
 		});
 	};
 
