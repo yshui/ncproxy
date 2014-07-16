@@ -119,6 +119,7 @@ wss.on("connection", function(ws) {
 
 		log.verbose("nouce2: "+nouce2.toString('hex'));
 		var res = JSON.stringify({
+			cmd: "new_connection",
 			id: j.id,
 			nouce: nouce2.toString('hex'),
 		});

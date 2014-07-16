@@ -1,6 +1,7 @@
 {
 	"localport": 1080,
 	"host": "ssproxy.herokuapp.com",
+	"api_port": 443,
 	"port": 80,
 	"password": "12345"
 }

@@ -16,8 +16,6 @@ try {
 	process.exit(1)
 }
 
-cfg.key = crypto.pbkdf2Sync(cfg.password, "", 1000, 256)
-
 function mask(data, gen){
 	if (!(data instanceof Buffer))
 		return
@@ -49,7 +47,7 @@ var handle_master_cmd = function(j, opt){
 		return;
 	mask(j, mdec);
 	j = j.toString('utf8');
-	log.error(j);
+	log.verbose(j);
 	try {
 		j = JSON.parse(j);
 	}catch(e){
@@ -83,10 +81,11 @@ var handle_master_cmd = function(j, opt){
 			break;
 	}
 };
+log.verbose("Starting https connection to server");
 var req = https.request({
-	host: cfg.host, port: cfg.port,
+	host: cfg.host, port: cfg.api_port,
 	headers: {"Content-Type": 'application/json'},
-	method: 'POST', path: '/', ciphers: 'DHE'
+	method: 'POST', path: '/'
 },function(res){
 	log.verbose("master nouce response");
 	var response = "";
@@ -110,16 +109,16 @@ var req = https.request({
 				throw "No nouce";
 			if (!response.key)
 				throw "No key";
+			mkey = new Buffer(response.key, 'hex');
 			var nouce = new Buffer(response.nouce, 'hex');
-			menc = new salsa(response.key, nouce);
-			mdec = new salsa(response.key, rb);
+			menc = new salsa(mkey, nouce);
+			mdec = new salsa(mkey, rb);
 		}catch(e){
 			log.verbose("Can't parse server response");
 			log.verbose(e);
 			process.exit(1);
 		}
 		master = new ws(svr_url+"/"+response.id, {mask: false});
-		mkey = response.key;
 		master.on('open', function(){
 			esend(master, JSON.stringify({api: true}), menc);
 			ssvr.listen(cfg.localport);
@@ -129,8 +128,9 @@ var req = https.request({
 			log.error("Master connection gone");
 			process.exit(1);
 		});
-		master.on('error', function(){
+		master.on('error', function(err){
 			log.error("master error");
+			log.error(JSON.stringify(err));
 		});
 	});
 });
@@ -184,7 +184,7 @@ ssvr = net.createServer(function(c){
 		var req = {
 			cmd: "new_connection",
 			id: conn.id,
-			nouce: n1.toString('hex');
+			nouce: n1.toString('hex')
 		};
 		c.id = conn.id;
 		c.dec = new salsa(mkey, n1);
