@@ -135,7 +135,7 @@ wss.on("connection", function(ws) {
 
 	var handle_local_end = function(j){
 		if (!connections[j.id]) {
-			log.error('Malformed client request, nonexistent id');
+			log.error('Malformed client request, nonexistent id'+j.id);
 			return ws.close(1003);
 		}
 		var conn = connections[j.id];
@@ -264,6 +264,6 @@ wss.on("connection", function(ws) {
 	ws.once("message", phase1);
 
 	ws.on("close", function() {
-		log.verbose("websocket connection close")
+		log.verbose("websocket connection close, id="+ws.conn.id)
 	})
 })
