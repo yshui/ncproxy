@@ -56,6 +56,8 @@ app.use(function(req, res){
 		    dec: dec,
 		    key: key,
 		    id: rb,
+		    remoteEnded: false,
+		    localEnded: false,
 		    conn: {}};
 	connections[rb] = conn;
 
@@ -117,6 +119,8 @@ wss.on("connection", function(ws) {
 			enc: enc,
 			dec: dec,
 			id: j.id,
+			remoteEnded: false,
+			localEnded: false,
 			master: ws
 		};
 		connections[j.id] = conn;
@@ -184,6 +188,8 @@ wss.on("connection", function(ws) {
 		log.verbose(opt.binary);
 		if (opt.binary !== true)
 			return;
+		if (ws.conn.remoteEnded)
+			return;
 		mask(data, ws.conn.dec);
 		ws.c.write(data);
 	};
@@ -247,6 +253,7 @@ wss.on("connection", function(ws) {
 			}
 		});
 		ws.c.on('end', function(){
+			ws.conn.remoteEnded = true;
 			if (ws.conn.master) {
 				//Send remote_end cmd
 				var msg = JSON.stringify({cmd: "remote_end", id: ws.conn.id});
