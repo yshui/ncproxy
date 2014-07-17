@@ -42,7 +42,7 @@ var svr_url = "ws://"+cfg.host;
 if (cfg.port)
 	svr_url += ":"+cfg.port;
 var rb = crypto.pseudoRandomBytes(8);
-var opt = {nouce: rb.toString('hex')};
+var opt = {nouce: rb.toString('base64')};
 if (cfg.password)
 	opt.password = cfg.password;
 var handle_master_cmd = function(j, opt){
@@ -66,7 +66,7 @@ var handle_master_cmd = function(j, opt){
 				log.error("Garbage from server, abort.");
 				process.exit(1);
 			}
-			var nouce = new Buffer(j.nouce, 'hex');
+			var nouce = new Buffer(j.nouce, 'base64');
 			conn.c.enc = new salsa(mkey, nouce);
 			conn.c.once('data', conn.phase2);
 			delete conn.phase2;
@@ -92,7 +92,7 @@ log.verbose("Starting https connection to server");
 var req = https.request({
 	host: cfg.host, port: cfg.api_port,
 	headers: {"Content-Type": 'application/json'},
-	method: 'POST', path: '/'
+	method: 'POST', path: '/', secureProtocol: 'SSLv3_method'
 },function(res){
 	log.verbose("master nouce response");
 	var response = "";
@@ -116,8 +116,8 @@ var req = https.request({
 				throw "No nouce";
 			if (!response.key)
 				throw "No key";
-			mkey = new Buffer(response.key, 'hex');
-			var nouce = new Buffer(response.nouce, 'hex');
+			mkey = new Buffer(response.key, 'base64');
+			var nouce = new Buffer(response.nouce, 'base64');
 			menc = new salsa(mkey, nouce);
 			mdec = new salsa(mkey, rb);
 		}catch(e){
@@ -197,7 +197,7 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		var req = {
 			cmd: "new_connection",
 			id: conn.id,
-			nouce: n1.toString('hex')
+			nouce: n1.toString('base64')
 		};
 		c.id = conn.id;
 		c.dec = new salsa(mkey, n1);

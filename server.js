@@ -46,12 +46,12 @@ app.use(function(req, res){
 		return res.end();
 	if (cfg.password && cfg.password !== req.body.password)
 		return res.end('{"err":"Password mismatch"}');
-	var nouce = new Buffer(req.body.nouce, 'hex');
+	var nouce = new Buffer(req.body.nouce, 'base64');
 	var nouce2 = crypto.pseudoRandomBytes(8);
 	var key = crypto.pseudoRandomBytes(32);
 	var enc = new salsa(key, nouce);
 	var dec = new salsa(key, nouce2);
-	var rb = crypto.pseudoRandomBytes(16).toString('hex');
+	var rb = crypto.pseudoRandomBytes(16).toString('base64');
 	var conn = {enc: enc,
 		    dec: dec,
 		    key: key,
@@ -61,8 +61,8 @@ app.use(function(req, res){
 
 	res.end(JSON.stringify({
 		id: rb,
-		nouce: nouce2.toString('hex'),
-		key: key.toString('hex')
+		nouce: nouce2.toString('base64'),
+		key: key.toString('base64')
 	}))
 })
 
@@ -109,7 +109,7 @@ wss.on("connection", function(ws) {
 			log.error('Malformed client request');
 			return ws.close(1003);
 		}
-		var nouce = new Buffer(j.nouce, 'hex');
+		var nouce = new Buffer(j.nouce, 'base64');
 		var nouce2 = crypto.pseudoRandomBytes(8);
 		var enc = new salsa(ws.conn.key, nouce);
 		var dec = new salsa(ws.conn.key, nouce2);
@@ -122,11 +122,11 @@ wss.on("connection", function(ws) {
 		connections[j.id] = conn;
 		ws.conn.conn[j.id] = 1;
 
-		log.verbose("nouce2: "+nouce2.toString('hex'));
+		log.verbose("nouce2: "+nouce2.toString('base64'));
 		var res = JSON.stringify({
 			cmd: "new_connection",
 			id: j.id,
-			nouce: nouce2.toString('hex'),
+			nouce: nouce2.toString('base64'),
 		});
 		res = new Buffer(res, 'utf8');
 		mask(res, ws.conn.enc);
