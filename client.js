@@ -61,6 +61,7 @@ var handle_master_cmd = function(j, opt){
 	var conn, res;
 	switch(j.cmd){
 		case "new_connection":
+			log.verbose("Total connections: "+Object.keys(connections).length);
 			conn = connections[j.id];
 			if (!conn || !j.nouce) {
 				log.error("Garbage from server, abort.");
@@ -141,7 +142,7 @@ var req = https.request({
 			log.error(JSON.stringify(err));
 		});
 		master.on('ping', function(){
-			log.verbose("ws ping from server (master connection)");
+			log.silly("ws ping from server (master connection)");
 			master.pong(false);
 		});
 	});
@@ -156,16 +157,23 @@ req.end();
 ssvr = net.createServer({allowHalfOpen: true}, function(c){
 	c.on('end', function(){
 		//send local_end
+		log.verbose("socks5 local end, "+c.targetAddr);
 		var req = {
 			cmd: "local_end",
 			id: c.id
 		}
-		if (c.ws == ws.OPEN)
+		if (!c.ws)
+			return c.end();
+		if (c.ws.readyState == ws.OPEN) {
+			log.verbose("Send local_end cmd");
 			esend(master, JSON.stringify(req), menc);
+		}
 	});
 	c.on('close', function(){
 		if (c.ws)
 			c.ws.close();
+		if (c.id)
+			delete connections[c.id];
 	});
 	c.on('error', function(err){
 		log.error("Socks5 connection closed");
@@ -187,7 +195,6 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		if (data[0] != 5)
 			//Not socks5
 			return c.end();
-		log.verbose(data);
 		var n1 = crypto.pseudoRandomBytes(8);
 		var conn = {
 			id: crypto.pseudoRandomBytes(16).toString('hex'),
@@ -229,6 +236,7 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 			break;
 		}
 		log.info("socks5 target: "+j.addr+":"+j.port);
+		c.targetAddr = j.addr;
 		var url = svr_url+"/"+c.id;
 		log.verbose("creating websocket to "+url);
 		c.ws = new ws(url, {mask: false});
@@ -241,6 +249,7 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		});
 		c.ws.on('close', function(err){
 			log.verbose('Websocket closed');
+			delete connections[c.id];
 			c.destroy();
 		});
 		c.ws.once("message", function ws_phase1(data, opt){
@@ -294,7 +303,7 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 			c.ws.send(j, {binary: true});
 		});
 		c.ws.on('ping', function(){
-			log.verbose("ws ping from server (data connection)");
+			log.silly("ws ping from server (data connection)");
 			c.ws.pong(false);
 		});
 	};

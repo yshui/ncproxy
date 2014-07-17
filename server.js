@@ -51,7 +51,7 @@ app.use(function(req, res){
 	var key = crypto.pseudoRandomBytes(32);
 	var enc = new salsa(key, nouce);
 	var dec = new salsa(key, nouce2);
-	var rb = crypto.pseudoRandomBytes(16).toString('base64');
+	var rb = crypto.pseudoRandomBytes(16).toString('hex');
 	var conn = {enc: enc,
 		    dec: dec,
 		    key: key,
@@ -96,12 +96,12 @@ wss.on("connection", function(ws) {
 		res = new Buffer(res, 'utf8');
 		mask(res, ws.conn.enc);
 		ws.send(res, {binary: true});
+		ws.close(1003);
 		delete connections[path];
 		if (ws.conn.master){
 			var m = ws.conn.master;
 			delete m.conn.conn[path];
 		}
-		ws.close(1003);
 	};
 
 	var handle_new_conn = function(j){
@@ -214,7 +214,9 @@ wss.on("connection", function(ws) {
 		log.verbose(JSON.stringify(j));
 		log.verbose("Target: "+j.addr+":"+j.port);
 		ws.conn.c = ws.c = net.connect({host:j.addr, port:j.port, allowHalfOpen: true});
+		ws.c.connected = false;
 		ws.c.on('connect',function(){
+			ws.c.connected = true;
 			log.verbose("connected to "+j.addr+"("+ws.c.remoteAddress+"):"+j.port);
 			var res = {rep: 0, atyp: 1,
 				   addr: ws.c.localAddress,
@@ -229,15 +231,20 @@ wss.on("connection", function(ws) {
 			ws.send(data, {binary: true});
 		});
 		ws.c.on('error', function(e){
-			log.error("Failed to connect to "+j.addr);
-			log.error(e);
-			if (e.code === 'ECONNREFUSED')
-				return errrep(5);
-			if (e.code === 'ENETUNREACH')
-				return errrep(3);
-			if (e.code === 'ENOTFOUND')
-				return errrep(4);
-			return errrep(1);
+			if (!ws.c.connected) {
+				log.error("Failed to connect to "+j.addr);
+				log.error(JSON.stringify(e));
+				if (e.code === 'ECONNREFUSED')
+					return errrep(5);
+				if (e.code === 'ENETUNREACH')
+					return errrep(3);
+				if (e.code === 'ENOTFOUND')
+					return errrep(4);
+				return errrep(1);
+			}else{
+				log.error("Connection to remote server closed with error");
+				log.error(JSON.stringify(e));
+			}
 		});
 		ws.c.on('end', function(){
 			if (ws.conn.master) {
@@ -249,6 +256,7 @@ wss.on("connection", function(ws) {
 			}
 		});
 		ws.c.on('close', function(){
+			ws.close(1000);
 			delete connections[path];
 			if (ws.conn.master){
 				var m = ws.conn.master;
@@ -256,7 +264,6 @@ wss.on("connection", function(ws) {
 			} else {
 				log.warn("WTF?");
 			}
-			ws.close(1000);
 		});
 	};
 
