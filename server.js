@@ -253,6 +253,7 @@ wss.on("connection", function(ws) {
 			}
 		});
 		ws.c.on('end', function(){
+			log.verbose("remote end ended");
 			ws.conn.remoteEnded = true;
 			if (ws.conn.master) {
 				//Send remote_end cmd
