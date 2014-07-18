@@ -22,7 +22,7 @@ function mask(data, gen){
 	if (!(data instanceof Buffer))
 		return
 	if (!(gen instanceof salsa))
-		return
+		throw "gen is not an salsa cipher"
 	var out = gen.getBytes(data.length);
 	var i = 0;
 	for (i = 0; i < data.length; i++)
@@ -41,6 +41,7 @@ var svr_url = "ws://"+cfg.host;
 if (cfg.port)
 	svr_url += ":"+cfg.port;
 var rb = crypto.pseudoRandomBytes(8);
+var opt = {};
 if (cfg.password)
 	opt.password = cfg.password;
 log.verbose("Starting https connection to server");
@@ -80,12 +81,14 @@ var req = https.request({
 			log.verbose(e);
 			process.exit(1);
 		}
+		ssvr.listen(cfg.localport);
 	});
 });
 req.on('error', function(err){
 	log.error(err);
 	process.exit(1);
 });
+req.write(JSON.stringify(opt));
 req.end();
 
 ssvr = net.createServer({allowHalfOpen: true}, function(c){
@@ -132,11 +135,11 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		}
 		if (opt.binary !== true)
 			return;
-		mask(data, c.dec);
+		mask(data, c.ws.dec);
 		c.write(data);
 	}
 	var phase3 = function(data){
-		mask(data, c.enc);
+		mask(data, c.ws.enc);
 		c.ws.send(data, {binary: true});
 	};
 	var phase2 = function(data){
@@ -214,15 +217,16 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 			log.silly("ping from server");
 			c.ws.pong(msg, {binry: true}, false);
 			mask(msg, c.ws.dec);
-			if (msg === 'remote_end') {
+			if (msg == 'remote_end') {
 				c.end();
 				c.remoteEnded = true;
-			}else if(msg !== 'nop') {
-				log.warn("malformed ping from server");
+			}else if(msg != 'nop') {
+				log.warn("malformed ping from server "+msg);
 				c.ws.close(1003);
 				c.destroy();
 			}
 		});
+		mask(j, c.ws.enc);
 		c.ws.send(j, {binary: true});
 	};
 	var phase1 = function(data){
@@ -230,16 +234,20 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		if (data[0] != 5)
 			//Not socks5
 			return c.end();
-		var res = new Buffer('0501', 'hex');
+		var res = new Buffer('0500', 'hex');
 		var url = svr_url+"/"+mid+'-'+mcount;
+		mcount++;
 		log.verbose("creating websocket to "+url);
 		c.ws = new ws(url, {mask: false});
 		c.ws.on('open', function(){
 			var data = crypto.pseudoRandomBytes(40);
 			var key = data.slice(0, 32);
 			var nouce = data.slice(32, 40);
+			log.verbose("key: "+key.toString('base64'));
+			log.verbose("nouce(client): "+nouce.toString('base64'));
+			c.ws.key = new Buffer(key.length);
+			key.copy(c.ws.key);
 			c.ws.dec = new salsa(key, nouce);
-			c.ws.key = key;
 			mask(data, menc);
 			c.ws.send(data, {binary: true});
 		});
@@ -250,12 +258,14 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 				return errrep(1);
 			}
 			mask(msg, c.ws.dec);
+			log.verbose("key: "+c.ws.key.toString('base64'));
+			log.verbose("nouce(server): "+msg.toString('base64'));
 			c.ws.enc = new salsa(c.ws.key, msg);
 			delete c.ws.key;
 			c.write(res);
 			c.once('data', phase2);
 		});
-		c.ws.on('error', function(){
+		c.ws.on('error', function(err){
 			log.error('Websocket error');
 			log.error(JSON.stringify(err));
 		});

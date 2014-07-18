@@ -44,11 +44,9 @@ app.use(bp.json());
 app.use(function(req, res){
 	log.verbose(JSON.stringify(req.body));
 	res.setHeader('Content-Type', 'application/json');
-	if (!req.body.nouce)
-		return res.end();
 	if (cfg.password && cfg.password !== req.body.password)
 		return res.end('{"err":"Password mismatch"}');
-	var nouce = new Buffer(req.body.nouce, 'base64');
+	var nouce = crypto.pseudoRandomBytes(8);
 	var key = crypto.pseudoRandomBytes(32);
 	var dec = new salsa(key, nouce);
 	var rb;
@@ -56,8 +54,7 @@ app.use(function(req, res){
 		rb = crypto.pseudoRandomBytes(16).toString('hex');
 	}while(cps[rb]);
 	var cp = {dec: dec,
-		  id: rb,
-		  key: key};
+		  id: rb};
 	cps[rb] = cp;
 
 	res.end(JSON.stringify({
@@ -85,7 +82,7 @@ wss.on("connection", function(ws) {
 	ws.id = pathp[1];
 
 	ws.on('close', function(){
-		clearInterval(ws.timer);
+		clearTimeout(ws.timer);
 		if (ws.c)
 			ws.c.destroy();
 	});
@@ -95,7 +92,6 @@ wss.on("connection", function(ws) {
 		ws.ping(b, {binary: true}, false);
 		ws.timer = setTimeout(keepalive, 10000);
 	}
-	ws.timer = setTimeout(ws.timer, 10000);
 	var errrep = function(repcode){
 		var res = JSON.stringify({rep: repcode});
 		res = new Buffer(res, 'utf8');
@@ -121,9 +117,9 @@ wss.on("connection", function(ws) {
 			return;
 		//Decode data
 		mask(data, ws.dec);
-		log.verbose(data.toString('utf8'));
 		//json encoded target address
 		var j = data.toString('utf8');
+		log.verbose(j);
 		try {
 			j = JSON.parse(j);
 		}catch(e){
@@ -134,7 +130,6 @@ wss.on("connection", function(ws) {
 			//Ipv6 not supported yet
 			return errrep(8);
 		//Open connection
-		log.verbose(JSON.stringify(j));
 		log.verbose("Target: "+j.addr+":"+j.port);
 		ws.c = net.connect({host:j.addr, port:j.port, allowHalfOpen: true});
 		ws.c.connected = false;
@@ -154,11 +149,11 @@ wss.on("connection", function(ws) {
 				ws.pong(msg, {binary: true});
 				mask(msg, ws.dec);
 				msg = msg.toString('utf8');
-				if (msg === "local_end") {
+				if (msg == "local_end") {
 					ws.c.end();
 					ws.localEnded = true;
-				} else if(msg !== "nop") {
-					log.warn("malformed ping from client");
+				} else if(msg != "nop") {
+					log.warn("malformed ping from client"+msg);
 					ws.close(1003);
 					ws.c.destroy();
 				}
@@ -201,6 +196,7 @@ wss.on("connection", function(ws) {
 		//key exchange phase
 		if (opt.binary !== true)
 			return;
+		log.verbose("Key exchange message from client");
 		mask(data, ws.cp.dec);
 		if (data.length != 40){
 			log.warn("Malformed key");
@@ -208,12 +204,16 @@ wss.on("connection", function(ws) {
 		}
 		var key = data.slice(0, 32);
 		var nouce = data.slice(32, 40);
+		log.verbose("key: "+key.toString('base64'));
+		log.verbose("nouce(client): "+nouce.toString('base64'));
 		ws.enc = new salsa(key, nouce);
 		nouce = crypto.pseudoRandomBytes(8);
+		log.verbose("nouce(server): "+nouce.toString('base64'));
 		ws.dec = new salsa(key, nouce);
 		mask(nouce, ws.enc);
 		ws.send(nouce, {binary: true});
 		ws.once('message', phase1);
+		ws.timer = setTimeout(keepalive, 10000);
 	}
 
 	ws.once("message", phase0);
