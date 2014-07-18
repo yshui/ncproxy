@@ -101,7 +101,6 @@ wss.on("connection", function(ws) {
 	};
 
 	var phase2 = function(data, opt){
-		log.verbose(opt.binary);
 		if (opt.binary !== true)
 			return;
 		if (ws.localEnded) {
@@ -204,11 +203,8 @@ wss.on("connection", function(ws) {
 		}
 		var key = data.slice(0, 32);
 		var nouce = data.slice(32, 40);
-		log.verbose("key: "+key.toString('base64'));
-		log.verbose("nouce(client): "+nouce.toString('base64'));
 		ws.enc = new salsa(key, nouce);
 		nouce = crypto.pseudoRandomBytes(8);
-		log.verbose("nouce(server): "+nouce.toString('base64'));
 		ws.dec = new salsa(key, nouce);
 		mask(nouce, ws.enc);
 		ws.send(nouce, {binary: true});

@@ -243,8 +243,6 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 			var data = crypto.pseudoRandomBytes(40);
 			var key = data.slice(0, 32);
 			var nouce = data.slice(32, 40);
-			log.verbose("key: "+key.toString('base64'));
-			log.verbose("nouce(client): "+nouce.toString('base64'));
 			c.ws.key = new Buffer(key.length);
 			key.copy(c.ws.key);
 			c.ws.dec = new salsa(key, nouce);
@@ -258,8 +256,6 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 				return errrep(1);
 			}
 			mask(msg, c.ws.dec);
-			log.verbose("key: "+c.ws.key.toString('base64'));
-			log.verbose("nouce(server): "+msg.toString('base64'));
 			c.ws.enc = new salsa(c.ws.key, msg);
 			delete c.ws.key;
 			c.write(res);
