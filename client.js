@@ -8,7 +8,6 @@ var log = require("npmlog")
 log.level = "verbose";
 var cfg = fs.readFileSync("config.json", 'utf8')
 var ssvr;
-var connections = {};
 try {
 	cfg = JSON.parse(cfg)
 }catch(e){
@@ -37,58 +36,13 @@ function esend(ws, str, gen){
 }
 
 //Request a master websocket
-var master, menc, mdec, mkey;
+var master, menc, mcount = 0, mid;
 var svr_url = "ws://"+cfg.host;
 if (cfg.port)
 	svr_url += ":"+cfg.port;
 var rb = crypto.pseudoRandomBytes(8);
-var opt = {nouce: rb.toString('base64')};
 if (cfg.password)
 	opt.password = cfg.password;
-var handle_master_cmd = function(j, opt){
-	if (!opt.binary)
-		return;
-	mask(j, mdec);
-	j = j.toString('utf8');
-	log.verbose(j);
-	try {
-		j = JSON.parse(j);
-	}catch(e){
-		log.error("Garbage from server, abort.");
-		log.error(JSON.stringify(e));
-		process.exit(1);
-	}
-	var conn, res;
-	switch(j.cmd){
-		case "new_connection":
-			log.verbose("Total connections: "+Object.keys(connections).length);
-			conn = connections[j.id];
-			if (!conn || !j.nouce) {
-				log.error("Garbage from server, abort.");
-				process.exit(1);
-			}
-			var nouce = new Buffer(j.nouce, 'base64');
-			conn.c.enc = new salsa(mkey, nouce);
-			conn.c.once('data', conn.phase2);
-			delete conn.phase2;
-			res = new Buffer(2);
-			res[0] = 5;
-			res[1] = 0;
-			conn.c.write(res);
-			break;
-		case "remote_end":
-			conn = connections[j.id];
-			if (!conn) {
-				log.error("Garbage from server, abort.");
-				process.exit(1);
-			}
-			conn.c.end();
-			break;
-		default :
-			log.error("Garbage from server, abort. unknown cmd.");
-			process.exit(1);
-	}
-};
 log.verbose("Starting https connection to server");
 var req = https.request({
 	host: cfg.host, port: cfg.api_port,
@@ -117,56 +71,32 @@ var req = https.request({
 				throw "No nouce";
 			if (!response.key)
 				throw "No key";
-			mkey = new Buffer(response.key, 'base64');
 			var nouce = new Buffer(response.nouce, 'base64');
-			menc = new salsa(mkey, nouce);
-			mdec = new salsa(mkey, rb);
+			var key = new Buffer(response.key, 'base64');
+			mid = response.id;
+			menc = new salsa(key, nouce);
 		}catch(e){
 			log.verbose("Can't parse server response");
 			log.verbose(e);
 			process.exit(1);
 		}
-		master = new ws(svr_url+"/"+response.id, {mask: false});
-		master.on('open', function(){
-			esend(master, JSON.stringify({api: true}), menc);
-			ssvr.listen(cfg.localport);
-		});
-		master.on('message', handle_master_cmd);
-		master.on('close', function(code){
-			log.error("Master connection gone");
-			log.error("code "+code);
-			process.exit(1);
-		});
-		master.on('error', function(err){
-			log.error("master error");
-			log.error(JSON.stringify(err));
-		});
-		master.on('ping', function(){
-			log.silly("ws ping from server (master connection)");
-			master.pong(false);
-		});
 	});
 });
 req.on('error', function(err){
 	log.error(err);
 	process.exit(1);
 });
-req.write(JSON.stringify(opt));
 req.end();
 
 ssvr = net.createServer({allowHalfOpen: true}, function(c){
 	c.on('end', function(){
 		//send local_end
 		log.verbose("socks5 local end, "+c.targetAddr);
-		var req = {
-			cmd: "local_end",
-			id: c.id
-		}
-		if (!c.ws)
-			return c.end();
-		if (c.ws.readyState == ws.OPEN) {
-			log.verbose("Send local_end cmd");
-			esend(master, JSON.stringify(req), menc);
+		c.localEnded = true;
+		if (c.ws) {
+			var b = new Buffer('local_end', 'utf8');
+			mask(b, c.ws.enc);
+			c.ws.ping(b, {binary: true}, false);
 		}
 	});
 	c.on('close', function(){
@@ -180,6 +110,11 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		log.error(JSON.stringify(err));
 	});
 	var errrep = function (repcode){
+		if (c.closed)
+			return;
+		if (c.connected)
+			return c.destroy();
+		c.closed = true;
 		var res = new Buffer(10);
 		res[0] = 5;
 		res[1] = repcode & 0xff;
@@ -189,29 +124,21 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		res[8] = res[9] = 0;
 		c.write(res);
 		c.end();
-	}
-	var phase1 = function(data){
-		//Phase1: Hello from clients
-		if (data[0] != 5)
-			//Not socks5
-			return c.end();
-		var n1 = crypto.pseudoRandomBytes(8);
-		var conn = {
-			id: crypto.pseudoRandomBytes(16).toString('hex'),
-			c: c,
-			phase2: phase2
-		};
-		var req = {
-			cmd: "new_connection",
-			id: conn.id,
-			nouce: n1.toString('base64')
-		};
-		c.id = conn.id;
-		c.dec = new salsa(mkey, n1);
-		connections[conn.id] = conn;
-		esend(master, JSON.stringify(req), menc);
 	};
-	c.once('data', phase1);
+	var ws_forward = function(data, opt){
+		if (c.remoteEnded) {
+			log.warn("msg from server after remote_end");
+			return;
+		}
+		if (opt.binary !== true)
+			return;
+		mask(data, c.dec);
+		c.write(data);
+	}
+	var phase3 = function(data){
+		mask(data, c.enc);
+		c.ws.send(data, {binary: true});
+	};
 	var phase2 = function(data){
 		log.verbose("Received socks5 request");
 		if (data[0] != 5)
@@ -226,39 +153,23 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 			//4 bytes ip
 			var tmp = data.slice(4, 8);
 			j.addr = tmp[0]+"."+tmp[1]+"."+tmp[2]+"."+tmp[3];
-			j.port = data.readInt16BE(8);
+			j.port = data.readUInt16BE(8);
 			break;
 		case 3:
 			var len = data[4];
 			var tmp = data.slice(5, 5+len);
 			j.addr = tmp.toString('utf8');
-			j.port = data.readInt16BE(5+len);
+			j.port = data.readUInt16BE(5+len);
 			break;
 		}
 		log.info("socks5 target: "+j.addr+":"+j.port);
 		c.targetAddr = j.addr;
-		var url = svr_url+"/"+c.id;
-		log.verbose("creating websocket to "+url);
-		c.ws = new ws(url, {mask: false});
 		j = JSON.stringify(j);
 		j = new Buffer(j, 'utf8');
-		mask(j, c.enc);
-		c.ws.on('error', function(err){
-			log.error('Websocket error');
-			log.error(JSON.stringify(err));
-		});
-		c.ws.on('close', function(err){
-			log.verbose('Websocket closed');
-			delete connections[c.id];
-			c.destroy();
-		});
-		c.ws.once("message", function ws_phase1(data, opt){
-			if (opt.binary !== true){
-				c.ws.close();
-				c.end();
+		c.ws.once('message', function(data, opt){
+			if (opt.binary !== true)
 				return;
-			}
-			mask(data, c.dec);
+			mask(data, c.ws.dec);
 			var j = data.toString('utf8');
 			log.verbose(j);
 			try {
@@ -296,25 +207,61 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 			}
 			res.writeUInt16BE(j.port, 8);
 			c.on('data', phase3);
-			c.ws.on('message', ws_phase2);
+			c.ws.on('message', ws_forward);
 			c.write(res);
 		});
+		c.ws.on('ping', function(msg){
+			log.silly("ping from server");
+			c.ws.pong(msg, {binry: true}, false);
+			mask(msg, c.ws.dec);
+			if (msg === 'remote_end') {
+				c.end();
+				c.remoteEnded = true;
+			}else if(msg !== 'nop') {
+				log.warn("malformed ping from server");
+				c.ws.close(1003);
+				c.destroy();
+			}
+		});
+		c.ws.send(j, {binary: true});
+	};
+	var phase1 = function(data){
+		//Phase1: Hello from clients
+		if (data[0] != 5)
+			//Not socks5
+			return c.end();
+		var res = new Buffer('0501', 'hex');
+		var url = svr_url+"/"+mid+'-'+mcount;
+		log.verbose("creating websocket to "+url);
+		c.ws = new ws(url, {mask: false});
 		c.ws.on('open', function(){
-			c.ws.send(j, {binary: true});
+			var data = crypto.pseudoRandomBytes(40);
+			var key = data.slice(0, 32);
+			var nouce = data.slice(32, 40);
+			c.ws.dec = new salsa(key, nouce);
+			c.ws.key = key;
+			mask(data, menc);
+			c.ws.send(data, {binary: true});
 		});
-		c.ws.on('ping', function(){
-			log.silly("ws ping from server (data connection)");
-			c.ws.pong(false);
+		c.ws.once('message', function(msg){
+			if (msg.length != 8){
+				log.warn("Malformed nouce");
+				ws.close();
+				return errrep(1);
+			}
+			mask(msg, c.ws.dec);
+			c.ws.enc = new salsa(c.ws.key, msg);
+			delete c.ws.key;
+			c.write(res);
+			c.once('data', phase2);
+		});
+		c.ws.on('error', function(){
+			log.error('Websocket error');
+			log.error(JSON.stringify(err));
+		});
+		c.ws.on('close', function(){
+			errrep(1);
 		});
 	};
-	var phase3 = function(data){
-		mask(data, c.enc);
-		c.ws.send(data, {binary: true});
-	};
-	var ws_phase2 = function(data, opt){
-		if (opt.binary !== true)
-			return;
-		mask(data, c.dec);
-		c.write(data);
-	}
+	c.once('data', phase1);
 });
