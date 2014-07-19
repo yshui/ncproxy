@@ -27,8 +27,6 @@ try {
 if (cfg.log_level)
 	log.level = cfg.log_level;
 
-var connections = {};
-
 function mask(data, gen){
 	if (!(data instanceof Buffer))
 		throw "Data is not buffer";
@@ -40,26 +38,23 @@ function mask(data, gen){
 		data[i] ^= out[i];
 }
 
-app.use(bp.json());
-app.use(function(req, res){
+app.use(bp.json())
+   .use(function(req, res){
 	log.verbose(JSON.stringify(req.body));
 	res.setHeader('Content-Type', 'application/json');
 	if (cfg.password && cfg.password !== req.body.password)
 		return res.end('{"err":"Password mismatch"}');
-	var nouce = crypto.pseudoRandomBytes(8);
 	var key = crypto.pseudoRandomBytes(32);
-	var dec = new salsa(key, nouce);
 	var rb;
 	do {
 		rb = crypto.pseudoRandomBytes(16).toString('hex');
 	}while(cps[rb]);
-	var cp = {dec: dec,
+	var cp = {key: key,
 		  id: rb};
 	cps[rb] = cp;
 
 	res.end(JSON.stringify({
 		id: rb,
-		nouce: nouce.toString('base64'),
 		key: key.toString('base64')
 	}))
 })
@@ -81,11 +76,14 @@ wss.on("connection", function(ws) {
 	ws.cp = cps[pathp[0]];
 	ws.id = pathp[1];
 
-	ws.on('close', function(){
-		clearTimeout(ws.timer);
+	ws.on("close", function() {
+		log.verbose("websocket connection close, master id="+ws.cp.id+" ,id="+ws.id)
+		if (ws.timer)
+			clearTimeout(ws.timer);
 		if (ws.c)
 			ws.c.destroy();
 	});
+
 	var keepalive = function(){
 		var b = new Buffer('nopXXXXXXXXXXXXX', 'utf8');
 		mask(b, ws.enc);
@@ -97,6 +95,8 @@ wss.on("connection", function(ws) {
 		res = new Buffer(res, 'utf8');
 		mask(res, ws.enc);
 		ws.send(res, {binary: true});
+		clearTimeout(ws.timer);
+		ws.removeAllListener();
 		ws.close(1003);
 	};
 
@@ -104,7 +104,7 @@ wss.on("connection", function(ws) {
 		if (opt.binary !== true)
 			return;
 		if (ws.localEnded) {
-			log.warn("Received data from websocket after local_end");
+			log.warn("Received data from websocket after local_end "+ws.id+"-"+ws.cp.id);
 			return;
 		}
 		mask(data, ws.dec);
@@ -122,7 +122,9 @@ wss.on("connection", function(ws) {
 		try {
 			j = JSON.parse(j);
 		}catch(e){
-			log.warn("Garbage from client");
+			log.warn("Garbage from client "+ws.id+"/"+ws.cp.id);
+			clearTimeout(ws.timer);
+			ws.removeAllListener();
 			return ws.close(1003);
 		}
 		if (j.addrtype == 4)
@@ -152,7 +154,9 @@ wss.on("connection", function(ws) {
 					ws.c.end();
 					ws.localEnded = true;
 				} else if(msg != "nopXXXXXXXXXXXXX") {
-					log.warn("malformed ping from client"+msg);
+					log.warn("malformed ping from client"+msg+' '+ws.id+"-"+ws.cp.id);
+					clearTimeout(ws.timer);
+					ws.removeAllListener();
 					ws.close(1003);
 					ws.c.destroy();
 				}
@@ -174,12 +178,12 @@ wss.on("connection", function(ws) {
 					return errrep(4);
 				return errrep(1);
 			}else{
-				log.error("Connection to remote server closed with error");
+				log.error("Connection to remote server closed with error "+ws.id+"-"+ws.cp.id);
 				log.error(JSON.stringify(e));
 			}
 		});
 		ws.c.on('end', function(){
-			log.verbose("remote end ended");
+			log.verbose("remote end ended "+ws.id+"-"+ws.cp.id);
 			//Send remote_end cmd
 			var msg = "remote_endXXXXXX";
 			msg = new Buffer(msg, 'utf8');
@@ -187,6 +191,8 @@ wss.on("connection", function(ws) {
 			ws.ping(msg, {binary: true}, false);
 		});
 		ws.c.on('close', function(){
+			clearTimeout(ws.timer);
+			ws.removeAllListeners();
 			ws.close(1000);
 		});
 	};
@@ -195,26 +201,26 @@ wss.on("connection", function(ws) {
 		//key exchange phase
 		if (opt.binary !== true)
 			return;
-		log.verbose("Key exchange message from client");
-		mask(data, ws.cp.dec);
-		if (data.length != 40){
-			log.warn("Malformed key");
+		log.verbose("Key exchange message from client "+ws.id+"-"+ws.cp.id);
+		if (data.length != 8){
+			log.warn("Malformed nouce");
+			ws.removeAllListeners();
 			return ws.close(1003);
 		}
-		var key = data.slice(0, 32);
-		var nouce = data.slice(32, 40);
-		ws.enc = new salsa(key, nouce);
-		nouce = crypto.pseudoRandomBytes(8);
+		log.verbose(ws.id+"/"+ws.cp.id+" nouce(client)="+data.toString("base64"));
+		var tmpenc = new salsa(ws.cp.key, data);
+		var newres = crypto.pseudoRandomBytes(40);
+		var key = newres.slice(0, 32);
+		var nouce = newres.slice(32, 40);
+		log.verbose(ws.id+"/"+ws.cp.id+" key="+key.toString("base64"));
+		log.verbose(ws.id+"/"+ws.cp.id+" nouce(server)="+nouce.toString("base64"));
+		ws.enc = new salsa(key, data);
 		ws.dec = new salsa(key, nouce);
-		mask(nouce, ws.enc);
-		ws.send(nouce, {binary: true});
+		mask(newres, tmpenc);
 		ws.once('message', phase1);
+		ws.send(newres, {binary: true});
 		ws.timer = setTimeout(keepalive, 10000);
 	}
 
 	ws.once("message", phase0);
-
-	ws.on("close", function() {
-		log.verbose("websocket connection close, master id="+ws.cp.id+" ,id="+ws.id)
-	})
 })

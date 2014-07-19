@@ -36,7 +36,8 @@ function esend(ws, str, gen){
 }
 
 //Request a master websocket
-var master, menc, mcount = 0, mid;
+var master, mcount = 0, mid;
+var mkey;
 var svr_url = "ws://"+cfg.host;
 if (cfg.port)
 	svr_url += ":"+cfg.port;
@@ -68,14 +69,10 @@ var req = https.request({
 			response = JSON.parse(response);
 			if (!response.id)
 				throw "No id";
-			if (!response.nouce)
-				throw "No nouce";
 			if (!response.key)
 				throw "No key";
-			var nouce = new Buffer(response.nouce, 'base64');
-			var key = new Buffer(response.key, 'base64');
+			mkey = new Buffer(response.key, 'base64');
 			mid = response.id;
-			menc = new salsa(key, nouce);
 		}catch(e){
 			log.verbose("Can't parse server response");
 			log.verbose(e);
@@ -96,23 +93,32 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		//send local_end
 		log.verbose("socks5 local end, "+c.targetAddr);
 		c.localEnded = true;
-		if (c.ws && c.ws.enc) {
+		if (c.connected) {
 			var b = new Buffer('local_endXXXXXXX', 'utf8');
 			mask(b, c.ws.enc);
 			c.ws.ping(b, {binary: true}, false);
 		}
 	});
 	c.on('close', function(){
-		if (c.ws)
+		if (c.ws) {
+			c.ws.removeAllListeners();
 			c.ws.close();
+		}
+		c.localEnded = true;
+		c.remoteEnded = true;
 	});
 	c.on('error', function(err){
 		log.error("Socks5 connection closed");
 		log.error(JSON.stringify(err));
+		console.log(err.stack);
 	});
 	var errrep = function (repcode){
 		if (c.closed)
 			return;
+		if (c.ws) {
+			c.ws.removeAllListeners();
+			c.ws.close();
+		}
 		if (c.connected)
 			return c.destroy();
 		c.closed = true;
@@ -124,7 +130,7 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		res[4] = res[5] = res[6] = res[7] = 0;
 		res[8] = res[9] = 0;
 		c.write(res);
-		c.end();
+		c.destroy();
 	};
 	var ws_forward = function(data, opt){
 		if (c.remoteEnded) {
@@ -177,20 +183,19 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 				j = JSON.parse(j);
 			}catch(e){
 				log.error("Can't parse websocket message");
+				c.ws.removeAllListeners();
 				c.ws.close();
-				c.end();
+				c.destroy();
 				return;
 			}
 			if (j.rep !== 0){
 				if (!j.rep)
 					j.rep = 1;
 				errrep(j.rep);
-				c.ws.close();
 				return;
 			}
 			if (j.atyp !== 1){
 				errrep(1);
-				c.ws.close();
 				return;
 			}
 			var frag = j.addr.split('.');
@@ -200,8 +205,8 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 			for(i = 0; i < 4; i++) {
 				var p = parseInt(frag[i]);
 				if (isNaN(p)){
+					log.warn("Invalid ip "+j.addr);
 					errrep(1);
-					c.ws.close();
 					return;
 				}
 				res[4+i] = p & 0xff;
@@ -209,21 +214,21 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 			res.writeUInt16BE(j.port, 8);
 			c.on('data', phase3);
 			c.ws.on('message', ws_forward);
+			c.ws.on('ping', function(msg){
+				log.silly("ping from server");
+				c.ws.pong(msg, {binry: true}, false);
+				mask(msg, c.ws.dec);
+				if (msg == 'remote_endXXXXXX') {
+					c.end();
+					c.remoteEnded = true;
+				}else if(msg != 'nopXXXXXXXXXXXXX') {
+					log.warn("malformed ping from server "+msg);
+					c.ws.close(1003);
+					c.destroy();
+				}
+			});
 			c.connected = true;
 			c.write(res);
-		});
-		c.ws.on('ping', function(msg){
-			log.silly("ping from server");
-			c.ws.pong(msg, {binry: true}, false);
-			mask(msg, c.ws.dec);
-			if (msg == 'remote_endXXXXXX') {
-				c.end();
-				c.remoteEnded = true;
-			}else if(msg != 'nopXXXXXXXXXXXXX') {
-				log.warn("malformed ping from server "+msg);
-				c.ws.close(1003);
-				c.destroy();
-			}
 		});
 		mask(j, c.ws.enc);
 		c.ws.send(j, {binary: true});
@@ -235,36 +240,39 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 			return c.end();
 		var res = new Buffer('0500', 'hex');
 		var url = svr_url+"/"+mid+'-'+mcount;
-		mcount++;
 		log.verbose("creating websocket to "+url);
 		c.ws = new ws(url, {mask: false});
+		c.ws.id = mcount;
+		mcount++;
 		c.ws.on('open', function(){
-			var data = crypto.pseudoRandomBytes(40);
-			var key = data.slice(0, 32);
-			var nouce = data.slice(32, 40);
-			c.ws.key = new Buffer(key.length);
-			key.copy(c.ws.key);
-			c.ws.dec = new salsa(key, nouce);
-			mask(data, menc);
+			var data = crypto.pseudoRandomBytes(8);
+			log.warn(c.ws.id+"/nouce(client)="+data.toString("base64"));
 			c.ws.send(data, {binary: true});
-		});
-		c.ws.once('message', function(msg){
-			if (msg.length != 8){
-				log.warn("Malformed nouce");
-				ws.close();
-				return errrep(1);
-			}
-			mask(msg, c.ws.dec);
-			c.ws.enc = new salsa(c.ws.key, msg);
-			delete c.ws.key;
-			c.write(res);
-			c.once('data', phase2);
+			var tmpdec = new salsa(mkey, data);
+			c.ws.once('message', function(msg){
+				if (msg.length != 40){
+					log.warn("Malformed key+nouce");
+					c.ws.close();
+					return errrep(1);
+				}
+				mask(msg, tmpdec);
+				var key = msg.slice(0, 32);
+				var nouce = msg.slice(32, 40);
+				log.warn(c.ws.id+"/key="+key.toString("base64"));
+				log.warn(c.ws.id+"/nouce(server)="+nouce.toString("base64"));
+				c.ws.enc = new salsa(key, nouce);
+				c.ws.dec = new salsa(key, data);
+				c.write(res);
+				c.once('data', phase2);
+			});
 		});
 		c.ws.on('error', function(err){
 			log.error('Websocket error');
 			log.error(JSON.stringify(err));
 		});
-		c.ws.on('close', function(){
+		c.ws.on('close', function(code){
+			if (code !== 1000)
+				log.warn("Websocket close ("+c.ws.id+") with error: "+code);
 			errrep(1);
 		});
 	};
