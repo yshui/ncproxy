@@ -246,7 +246,6 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		mcount++;
 		c.ws.on('open', function(){
 			var data = crypto.pseudoRandomBytes(8);
-			log.warn(c.ws.id+"/nouce(client)="+data.toString("base64"));
 			c.ws.send(data, {binary: true});
 			var tmpdec = new salsa(mkey, data);
 			c.ws.once('message', function(msg){
@@ -258,8 +257,6 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 				mask(msg, tmpdec);
 				var key = msg.slice(0, 32);
 				var nouce = msg.slice(32, 40);
-				log.warn(c.ws.id+"/key="+key.toString("base64"));
-				log.warn(c.ws.id+"/nouce(server)="+nouce.toString("base64"));
 				c.ws.enc = new salsa(key, nouce);
 				c.ws.dec = new salsa(key, data);
 				c.write(res);
