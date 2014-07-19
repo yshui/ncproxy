@@ -96,7 +96,7 @@ wss.on("connection", function(ws) {
 		mask(res, ws.enc);
 		ws.send(res, {binary: true});
 		clearTimeout(ws.timer);
-		ws.removeAllListener();
+		ws.removeAllListeners();
 		ws.close(1003);
 	};
 
@@ -124,7 +124,7 @@ wss.on("connection", function(ws) {
 		}catch(e){
 			log.warn("Garbage from client "+ws.id+"/"+ws.cp.id);
 			clearTimeout(ws.timer);
-			ws.removeAllListener();
+			ws.removeAllListeners();
 			return ws.close(1003);
 		}
 		if (j.addrtype == 4)
@@ -156,7 +156,7 @@ wss.on("connection", function(ws) {
 				} else if(msg != "nopXXXXXXXXXXXXX") {
 					log.warn("malformed ping from client"+msg+' '+ws.id+"-"+ws.cp.id);
 					clearTimeout(ws.timer);
-					ws.removeAllListener();
+					ws.removeAllListeners();
 					ws.close(1003);
 					ws.c.destroy();
 				}
