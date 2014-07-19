@@ -77,7 +77,7 @@ wss.on("connection", function(ws) {
 	log.verbose("websocket, path:"+path)
 	var pathp = path.split('-');
 	if (!cps[pathp[0]])
-		ws.close(1003);
+		return ws.close(1003);
 	ws.cp = cps[pathp[0]];
 	ws.id = pathp[1];
 
