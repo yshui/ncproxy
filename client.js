@@ -22,7 +22,7 @@ function mask(data, gen){
 	if (!(data instanceof Buffer))
 		return
 	if (!(gen instanceof salsa))
-		throw "gen is not an salsa cipher"
+		throw new Error("gen is not an salsa cipher");
 	var out = gen.getBytes(data.length);
 	var i = 0;
 	for (i = 0; i < data.length; i++)
@@ -96,8 +96,8 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		//send local_end
 		log.verbose("socks5 local end, "+c.targetAddr);
 		c.localEnded = true;
-		if (c.ws) {
-			var b = new Buffer('local_end', 'utf8');
+		if (c.ws && c.ws.enc) {
+			var b = new Buffer('local_endXXXXXXX', 'utf8');
 			mask(b, c.ws.enc);
 			c.ws.ping(b, {binary: true}, false);
 		}
@@ -105,8 +105,6 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 	c.on('close', function(){
 		if (c.ws)
 			c.ws.close();
-		if (c.id)
-			delete connections[c.id];
 	});
 	c.on('error', function(err){
 		log.error("Socks5 connection closed");
@@ -211,16 +209,17 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 			res.writeUInt16BE(j.port, 8);
 			c.on('data', phase3);
 			c.ws.on('message', ws_forward);
+			c.connected = true;
 			c.write(res);
 		});
 		c.ws.on('ping', function(msg){
 			log.silly("ping from server");
 			c.ws.pong(msg, {binry: true}, false);
 			mask(msg, c.ws.dec);
-			if (msg == 'remote_end') {
+			if (msg == 'remote_endXXXXXX') {
 				c.end();
 				c.remoteEnded = true;
-			}else if(msg != 'nop') {
+			}else if(msg != 'nopXXXXXXXXXXXXX') {
 				log.warn("malformed ping from server "+msg);
 				c.ws.close(1003);
 				c.destroy();

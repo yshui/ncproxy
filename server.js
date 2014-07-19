@@ -87,7 +87,7 @@ wss.on("connection", function(ws) {
 			ws.c.destroy();
 	});
 	var keepalive = function(){
-		var b = new Buffer('nop', 'utf8');
+		var b = new Buffer('nopXXXXXXXXXXXXX', 'utf8');
 		mask(b, ws.enc);
 		ws.ping(b, {binary: true}, false);
 		ws.timer = setTimeout(keepalive, 10000);
@@ -148,10 +148,10 @@ wss.on("connection", function(ws) {
 				ws.pong(msg, {binary: true});
 				mask(msg, ws.dec);
 				msg = msg.toString('utf8');
-				if (msg == "local_end") {
+				if (msg == "local_endXXXXXXX") {
 					ws.c.end();
 					ws.localEnded = true;
-				} else if(msg != "nop") {
+				} else if(msg != "nopXXXXXXXXXXXXX") {
 					log.warn("malformed ping from client"+msg);
 					ws.close(1003);
 					ws.c.destroy();
@@ -181,7 +181,7 @@ wss.on("connection", function(ws) {
 		ws.c.on('end', function(){
 			log.verbose("remote end ended");
 			//Send remote_end cmd
-			var msg = "remote_end";
+			var msg = "remote_endXXXXXX";
 			msg = new Buffer(msg, 'utf8');
 			mask(msg, ws.enc);
 			ws.ping(msg, {binary: true}, false);
