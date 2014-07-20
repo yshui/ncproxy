@@ -93,6 +93,7 @@ wss.on("connection", function(ws) {
 	var errrep = function(repcode){
 		var res = JSON.stringify({rep: repcode});
 		res = new Buffer(res, 'utf8');
+		log.verbose(ws.enc.counterWords[0]+","+ws.enc.counterWords[1]);
 		mask(res, ws.enc);
 		ws.send(res, {binary: true});
 		clearTimeout(ws.timer);
@@ -136,13 +137,17 @@ wss.on("connection", function(ws) {
 		ws.c.connected = false;
 		ws.c.on('connect',function(){
 			ws.c.connected = true;
-			log.verbose("connected to "+j.addr+"("+ws.c.remoteAddress+"):"+j.port);
+			log.verbose(ws.id+" connected to "+j.addr+"("+ws.c.remoteAddress+"):"+j.port);
 			var res = {rep: 0, atyp: 1,
 				   addr: ws.c.localAddress,
 				   port: ws.c.localPort};
 			res = new Buffer(JSON.stringify(res), 'utf8');
 			mask(res, ws.enc);
 			ws.send(res, {binary: true});
+			ws.c.on('data', function(data){
+				mask(data, ws.enc);
+				ws.send(data, {binary: true});
+			});
 			ws.on("message", phase2);
 			ws.on('ping', function(msg, opt){
 				if (opt.binary !== true)
@@ -150,6 +155,7 @@ wss.on("connection", function(ws) {
 				ws.pong(msg, {binary: true});
 				mask(msg, ws.dec);
 				msg = msg.toString('utf8');
+				log.verbose("ping from client "+ws.id+" "+msg);
 				if (msg == "local_endXXXXXXX") {
 					ws.c.end();
 					ws.localEnded = true;
@@ -162,13 +168,9 @@ wss.on("connection", function(ws) {
 				}
 			});
 		});
-		ws.c.on('data', function(data){
-			mask(data, ws.enc);
-			ws.send(data, {binary: true});
-		});
 		ws.c.on('error', function(e){
 			if (!ws.c.connected) {
-				log.error("Failed to connect to "+j.addr);
+				log.error("Failed to connect to "+j.addr+" id:"+ws.id);
 				log.error(JSON.stringify(e));
 				if (e.code === 'ECONNREFUSED')
 					return errrep(5);

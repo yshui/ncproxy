@@ -147,7 +147,7 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		c.ws.send(data, {binary: true});
 	};
 	var phase2 = function(data){
-		log.verbose("Received socks5 request");
+		log.verbose("Received socks5 request "+c.ws.id);
 		if (data[0] != 5)
 			return c.end();
 		if (data[1] != 1)
@@ -176,18 +176,23 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		c.ws.once('message', function(data, opt){
 			if (opt.binary !== true)
 				return;
+			log.verbose(c.ws.dec.counterWords[0]+","+c.ws.dec.counterWords[1]);
 			mask(data, c.ws.dec);
 			var j = data.toString('utf8');
-			log.verbose(j);
 			try {
 				j = JSON.parse(j);
 			}catch(e){
-				log.error("Can't parse websocket message");
+				log.error("Can't parse websocket message "+c.ws.id);
+				console.log(data);
+				log.error(c.ws.id+"/key="+c.ws.key.toString("base64"));
+				log.error(c.ws.id+"/nouce(client)="+c.ws.n2.toString("base64"));
+				log.error(c.ws.id+"/nouce(server)="+c.ws.n1.toString("base64"));
 				c.ws.removeAllListeners();
 				c.ws.close();
 				c.destroy();
 				return;
 			}
+			log.verbose(JSON.stringify(j));
 			if (j.rep !== 0){
 				if (!j.rep)
 					j.rep = 1;
@@ -214,19 +219,6 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 			res.writeUInt16BE(j.port, 8);
 			c.on('data', phase3);
 			c.ws.on('message', ws_forward);
-			c.ws.on('ping', function(msg){
-				log.silly("ping from server");
-				c.ws.pong(msg, {binry: true}, false);
-				mask(msg, c.ws.dec);
-				if (msg == 'remote_endXXXXXX') {
-					c.end();
-					c.remoteEnded = true;
-				}else if(msg != 'nopXXXXXXXXXXXXX') {
-					log.warn("malformed ping from server "+msg);
-					c.ws.close(1003);
-					c.destroy();
-				}
-			});
 			c.connected = true;
 			c.write(res);
 		});
@@ -245,6 +237,7 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		c.ws.id = mcount;
 		mcount++;
 		c.ws.on('open', function(){
+			log.verbose("connected to "+url);
 			var data = crypto.pseudoRandomBytes(8);
 			log.verbose(c.ws.id+"/nouce(client)="+data.toString("base64"));
 			c.ws.send(data, {binary: true});
@@ -258,6 +251,12 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 				mask(msg, tmpdec);
 				var key = msg.slice(0, 32);
 				var nouce = msg.slice(32, 40);
+				c.ws.key = new Buffer(32);
+				c.ws.n1 = new Buffer(8);
+				c.ws.n2 = new Buffer(8);
+				key.copy(c.ws.key);
+				nouce.copy(c.ws.n1);
+				data.copy(c.ws.n2);
 				log.verbose(c.ws.id+"/key="+key.toString("base64"));
 				log.verbose(c.ws.id+"/nouce(server)="+nouce.toString("base64"));
 				c.ws.enc = new salsa(key, nouce);
@@ -265,6 +264,21 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 				c.write(res);
 				c.once('data', phase2);
 			});
+		});
+		c.ws.on('ping', function(msg){
+			log.verbose("ping from server "+c.ws.id);
+			c.ws.pong(msg, {binry: true}, false);
+			mask(msg, c.ws.dec);
+			msg = msg.toString('utf8');
+			log.verbose("ping: "+msg);
+			if (msg == 'remote_endXXXXXX') {
+				c.end();
+				c.remoteEnded = true;
+			}else if(msg != 'nopXXXXXXXXXXXXX') {
+				log.warn("malformed ping from server "+msg);
+				c.ws.close(1003);
+				c.destroy();
+			}
 		});
 		c.ws.on('error', function(err){
 			log.error('Websocket error');
