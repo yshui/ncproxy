@@ -59,6 +59,12 @@ app.use(bp.json())
 	}))
 })
 
+if (cfg.keep_alive)
+	cfg.keep_alive *= 1000;
+else
+	cfg.keep_alive = 10000;
+console.log("Timer: "+cfg.keep_alive);
+
 var server = http.createServer(app)
 server.listen(port)
 
@@ -88,7 +94,7 @@ wss.on("connection", function(ws) {
 		var b = new Buffer('nopXXXXXXXXXXXXX', 'utf8');
 		mask(b, ws.enc);
 		ws.ping(b, {binary: true}, false);
-		ws.timer = setTimeout(keepalive, 10000);
+		ws.timer = setTimeout(keepalive, cfg.keep_alive);
 	}
 	var errrep = function(repcode){
 		var res = JSON.stringify({rep: repcode});
@@ -108,6 +114,8 @@ wss.on("connection", function(ws) {
 			log.warn("Received data from websocket after local_end "+ws.id+"-"+ws.cp.id);
 			return;
 		}
+		clearTimeout(ws.timer);
+		ws.timer = setTimeout(keepalive, cfg.keep_alive);
 		mask(data, ws.dec);
 		ws.c.write(data);
 	};
@@ -147,6 +155,8 @@ wss.on("connection", function(ws) {
 			ws.c.on('data', function(data){
 				mask(data, ws.enc);
 				ws.send(data, {binary: true});
+				clearTimeout(ws.timer);
+				ws.timer = setTimeout(keepalive, cfg.keep_alive);
 			});
 			ws.on("message", phase2);
 			ws.on('ping', function(msg, opt){
@@ -221,7 +231,7 @@ wss.on("connection", function(ws) {
 		mask(newres, tmpenc);
 		ws.once('message', phase1);
 		ws.send(newres, {binary: true});
-		ws.timer = setTimeout(keepalive, 10000);
+		ws.timer = setTimeout(keepalive, cfg.keep_alive);
 	}
 
 	ws.once("message", phase0);
