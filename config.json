@@ -4,5 +4,6 @@
 	"api_port": 443,
 	"port": 80,
 	"password": "12345",
-	"keep_alive": 40
+	"keep_alive": 40,
+	"log_level": "info"
 }
