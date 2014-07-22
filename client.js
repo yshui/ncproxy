@@ -7,7 +7,6 @@ var fs = require("fs")
 var log = require("npmlog")
 log.level = "verbose";
 var cfg = fs.readFileSync("config.json", 'utf8')
-var ssvr;
 try {
 	cfg = JSON.parse(cfg)
 }catch(e){
@@ -37,8 +36,9 @@ function esend(ws, str, gen){
 
 //Request a master websocket
 var master, mcount = 0, mid;
-var mkey;
+var mkey = false;
 var svr_url = "ws://"+cfg.host;
+var queue = [];
 if (cfg.port)
 	svr_url += ":"+cfg.port;
 var rb = crypto.pseudoRandomBytes(8);
@@ -46,49 +46,63 @@ var opt = {};
 if (cfg.password)
 	opt.password = cfg.password;
 log.verbose("Starting https connection to server");
-var req = https.request({
-	host: cfg.host, port: cfg.api_port,
-	headers: {"Content-Type": 'application/json'},
-	method: 'POST', path: '/', secureProtocol: 'SSLv3_method'
-},function(res){
-	log.verbose("master nouce response");
-	var response = "";
-	res.setEncoding('utf8');
-	res.on('data', function(data){
-		response += data;
-	});
-	res.on('error', function(err){
-		log.error("Read server response error");
-		log.error(JSON.stringify(err));
-		process.exit(1);
-	});
-	res.on('end', function(){
-		log.verbose("master nouce response end");
-		log.verbose(response);
-		try {
-			response = JSON.parse(response);
-			if (!response.id)
-				throw "No id";
-			if (!response.key)
-				throw "No key";
-			mkey = new Buffer(response.key, 'base64');
-			mid = response.id;
-		}catch(e){
-			log.verbose("Can't parse server response");
-			log.verbose(e);
+function mrefetch(){
+	log.info('Fetching the master key');
+	mkey = false;
+	mid = false;
+	mcount = 0;
+	var req = https.request({
+		host: cfg.host, port: cfg.api_port,
+		headers: {"Content-Type": 'application/json'},
+		method: 'POST', path: '/', secureProtocol: 'SSLv3_method'
+	},function(res){
+		log.verbose("master nouce response");
+		var response = "";
+		res.setEncoding('utf8');
+		res.on('data', function(data){
+			response += data;
+		});
+		res.on('error', function(err){
+			log.error("Read server response error");
+			log.error(JSON.stringify(err));
 			process.exit(1);
-		}
-		ssvr.listen(cfg.localport);
+		});
+		res.on('end', function(){
+			log.verbose("master nouce response end");
+			log.verbose(response);
+			try {
+				response = JSON.parse(response);
+				if (!response.id)
+					throw "No id";
+				if (!response.key)
+					throw "No key";
+				mkey = new Buffer(response.key, 'base64');
+				mid = response.id;
+			}catch(e){
+				log.verbose("Can't parse server response, retrying after 5s");
+				log.verbose(e);
+				setTimeout(mrefetch, 5000);
+				return;
+			}
+			var i;
+			var fake_data = new Buffer('0500', 'hex');
+			queue.map(function(p){
+				p(fake_data);
+			});
+			queue = [];
+		});
 	});
-});
-req.on('error', function(err){
-	log.error(err);
-	process.exit(1);
-});
-req.write(JSON.stringify(opt));
-req.end();
+	req.on('error', function(err){
+		log.verbose("Can't connect to server, retrying after 5s");
+		log.error(err);
+		setTimeout(mrefetch, 5000);
+	});
+	req.write(JSON.stringify(opt));
+	req.end();
+}
+mrefetch();
 
-ssvr = net.createServer({allowHalfOpen: true}, function(c){
+var ssvr = net.createServer({allowHalfOpen: true}, function(c){
 	c.on('end', function(){
 		//send local_end
 		log.verbose("socks5 local end, "+c.targetAddr);
@@ -225,11 +239,21 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		mask(j, c.ws.enc);
 		c.ws.send(j, {binary: true});
 	};
-	var phase1 = function(data){
+	var phase1;
+	var prekey1 = function(data) {
+		if (data[0] != 5)
+			//Not socks5
+			return c.end();
+		queue.push(phase1);
+	}
+	phase1 = function(data){
 		//Phase1: Hello from clients
 		if (data[0] != 5)
 			//Not socks5
 			return c.end();
+		if (mkey === false)
+			//master key on the road
+			return prekey1(data);
 		var res = new Buffer('0500', 'hex');
 		var url = svr_url+"/"+mid+'-'+mcount;
 		log.verbose("creating websocket to "+url);
@@ -242,7 +266,9 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 			log.verbose(c.ws.id+"/nouce(client)="+data.toString("base64"));
 			c.ws.send(data, {binary: true});
 			var tmpdec = new salsa(mkey, data);
+			c.good = false; //We don't know if the id is good yet.
 			c.ws.once('message', function(msg){
+				c.good = true;
 				if (msg.length != 40){
 					log.warn("Malformed key+nouce");
 					c.ws.close();
@@ -276,7 +302,7 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 				c.remoteEnded = true;
 			}else if(msg != 'nopXXXXXXXXXXXXX') {
 				log.warn("malformed ping from server "+msg);
-				c.ws.close(1003);
+				c.ws.close(1002);
 				c.destroy();
 			}
 		});
@@ -287,8 +313,18 @@ ssvr = net.createServer({allowHalfOpen: true}, function(c){
 		c.ws.on('close', function(code){
 			if (code !== 1000)
 				log.warn("Websocket close ("+c.ws.id+") with error: "+code);
-			errrep(1);
+			if (!c.good) {
+				//Refetch the key
+				if (mkey !== false)
+					mrefetch();
+				queue.push(phase1);
+			} else
+				errrep(1);
 		});
 	};
-	c.once('data', phase1);
+	if (mkey !== false)
+		c.once('data', phase1);
+	else
+		c.once('data', prekey1);
 });
+ssvr.listen(cfg.localport);

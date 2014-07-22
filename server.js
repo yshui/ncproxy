@@ -78,7 +78,7 @@ wss.on("connection", function(ws) {
 	log.verbose("websocket, path:"+path)
 	var pathp = path.split('-');
 	if (!cps[pathp[0]])
-		return ws.close(1003);
+		return ws.close(1002);
 	ws.cp = cps[pathp[0]];
 	ws.id = pathp[1];
 
@@ -104,7 +104,7 @@ wss.on("connection", function(ws) {
 		ws.send(res, {binary: true});
 		clearTimeout(ws.timer);
 		ws.removeAllListeners();
-		ws.close(1003);
+		ws.close(1002);
 	};
 
 	var phase2 = function(data, opt){
@@ -134,7 +134,7 @@ wss.on("connection", function(ws) {
 			log.warn("Garbage from client "+ws.id+"/"+ws.cp.id);
 			clearTimeout(ws.timer);
 			ws.removeAllListeners();
-			return ws.close(1003);
+			return ws.close(1002);
 		}
 		if (j.addrtype == 4)
 			//Ipv6 not supported yet
@@ -173,7 +173,7 @@ wss.on("connection", function(ws) {
 					log.warn("malformed ping from client"+msg+' '+ws.id+"-"+ws.cp.id);
 					clearTimeout(ws.timer);
 					ws.removeAllListeners();
-					ws.close(1003);
+					ws.close(1002);
 					ws.c.destroy();
 				}
 			});
@@ -217,7 +217,7 @@ wss.on("connection", function(ws) {
 		if (data.length != 8){
 			log.warn("Malformed nouce");
 			ws.removeAllListeners();
-			return ws.close(1003);
+			return ws.close(1002);
 		}
 		log.verbose(ws.id+"/"+ws.cp.id+" nouce(client)="+data.toString("base64"));
 		var tmpenc = new salsa(ws.cp.key, data);
